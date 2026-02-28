@@ -40,7 +40,7 @@ class SSEFileLock:
             self._fd = os.open(str(LOCK_FILE), os.O_CREAT | os.O_RDWR)
             fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             os.write(self._fd, f"{os.getpid()}\n".encode())
-            logger.info("SSE file-lock acquired (pid %d)", os.getpid())
+            logger.debug("SSE file-lock acquired (pid %d)", os.getpid())
             return True
         except (OSError, BlockingIOError):
             if self._fd is not None:
@@ -60,32 +60,39 @@ class SSEFileLock:
                 LOCK_FILE.unlink(missing_ok=True)
             except OSError:
                 pass
-            logger.info("SSE file-lock released")
+            logger.debug("SSE file-lock released")
 
 
-# ── SSE line parser (aligned with official template) ─────────
+# ── SSE line parser (matches official template exactly) ──────
 async def _parse_line(raw: bytes) -> dict | None:
-    """Parse one SSE data: line. Returns an event dict or None."""
+    """Parse one SSE line. Matches the official client_template.py logic."""
+    if not raw:
+        return None
+
     line = raw.decode("utf-8", errors="ignore").strip()
     if not line:
         return None
 
-    # Standard SSE format
+    # Standard SSE data format: data: ...
     if line.startswith("data:"):
         payload = line[5:].strip()
-    else:
-        return None
-
-    # Handshake
-    if payload == "connected":
-        logger.info("SSE handshake OK")
-        return None
+        if payload == "connected":
+            logger.info("SSE handshake OK")
+            return None
+        line = payload
 
     try:
-        return json.loads(payload)
+        event_json = json.loads(line)
     except json.JSONDecodeError:
-        logger.warning("SSE unparsable payload: %s", payload[:200])
+        logger.info("SSE raw: %s", line[:200])
         return None
+
+    event_type = event_json.get("type", "unknown")
+    event_data = event_json.get("data", {})
+    if not isinstance(event_data, dict):
+        event_data = {"value": event_data}
+
+    return {"type": event_type, "data": event_data}
 
 
 # ── Public entry point ───────────────────────────────────────
@@ -127,7 +134,7 @@ async def _sse_loop(event_queue: asyncio.Queue) -> None:
                 headers={"Accept": "text/event-stream", **HEADERS},
                 timeout=timeout,
             ) as session:
-                logger.info("SSE connecting → %s", SSE_URL)
+                logger.info("\U0001f50c SSE connecting  →  %s", SSE_URL)
                 async with session.get(SSE_URL) as resp:
                     if resp.status == 409:
                         logger.warning(
@@ -139,7 +146,7 @@ async def _sse_loop(event_queue: asyncio.Queue) -> None:
                         continue
 
                     resp.raise_for_status()
-                    logger.info("SSE connected (status %s)", resp.status)
+                    logger.info("\u2705 SSE connected")
 
                     async for raw_line in resp.content:
                         event = await _parse_line(raw_line)

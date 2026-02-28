@@ -76,6 +76,7 @@ def build_agent() -> Agent:
         tools=mcp_tools,
         max_steps=15,
         planning_interval=3,       # re-plan every 3 steps
+        
     )
     logger.info("Agent built with %d tools", len(mcp_tools))
     return agent
