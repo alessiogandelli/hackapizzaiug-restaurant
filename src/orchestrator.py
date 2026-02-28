@@ -21,6 +21,7 @@ from src.constants import (
     RECIPE_INGREDIENTS,
     DEFAULT_BIDS,
     MAX_BID_SPEND,
+    MAX_TURN_SPEND,
     ALL_INGREDIENTS,
     MAX_MARKET_PRICE,
     compute_market_prices_from_history,
@@ -83,7 +84,6 @@ class PhaseController:
 
         try:
             if phase == "speaking":
-                print('Running Speaking phase handler')
                 await self._handle_speaking()
             elif phase == "closed_bid":
                 await self._handle_bidding()
@@ -174,8 +174,8 @@ class PhaseController:
             await self._run_planner()
             self._planner_ran_this_turn = True
             self.memory.start_turn(self.state.balance)
-        
-        self._run_agent("opener", "You must call update_restaurant_is_open with is_open=true to open the restaurant.", span_name="phase_opener")
+
+        # NOTE: opener agent call removed — speaking agent already opens the restaurant below
 
         # Log what we're about to set
         logger.info("MENU to set:")
@@ -222,7 +222,10 @@ class PhaseController:
                 logger.info("  %s: %d", ing, qty)
 
         # Build bid list: skip ingredients we already have enough of
-        budget = min(MAX_BID_SPEND, self.state.balance * 0.95)
+        turn_remaining = self.memory.remaining_turn_budget(MAX_TURN_SPEND)
+        budget = min(MAX_BID_SPEND, self.state.balance * 0.95, turn_remaining)
+        logger.info("  Budget: %.0f (bid cap=%.0f, balance*0.95=%.0f, turn remaining=%.0f)",
+                    budget, MAX_BID_SPEND, self.state.balance * 0.95, turn_remaining)
         bids = []
         total_cost = 0.0
 
@@ -255,6 +258,9 @@ class PhaseController:
                        ing, need, fixed_price, total_cost)
 
         logger.info("FINAL BID: %d ingredients, total cost=%.0f, budget=%.0f", len(bids), total_cost, budget)
+
+        # Record bid spending against the turn cap
+        self.memory.record_spending(total_cost, "bids")
 
         if not bids:
             logger.info("Nothing to bid on — skipping")
@@ -310,13 +316,16 @@ class PhaseController:
 
         # Market agent (buy/sell) is DISABLED — observation only
         logger.info("Market agent disabled — skipping buy/sell actions")
+        logger.info("Turn spending so far: %.0f / %d", self.memory.turn_total_spent, MAX_TURN_SPEND)
 
         # # Build context for market agent
+        # market_budget = self.memory.remaining_turn_budget(MAX_TURN_SPEND)
         # context = (
         #     f"GAME STATE: {self.state.summary()}\n\n"
         #     f"INGREDIENTS WE STILL NEED (have 0 in stock): {json.dumps(needed)}\n"
         #     f"SURPLUS INGREDIENTS (not in our recipes): {json.dumps(surplus)}\n"
-        #     f"CURRENT BALANCE: {self.state.balance}\n\n"
+        #     f"CURRENT BALANCE: {self.state.balance}\n"
+        #     f"REMAINING TURN BUDGET: {market_budget:.0f} credits (HARD LIMIT — do NOT exceed this)\n\n"
         #     f"MAX BUY PRICES PER INGREDIENT (do NOT exceed these):\n"
         #     f"  - Polvere di Pulsar: 42 credits\n"
         #     f"  - Foglie di Mandragora: 38 credits\n"
@@ -328,6 +337,7 @@ class PhaseController:
         #     f"TASK: Scan market entries.\n"
         #     f"- BUY: execute_transaction on SELL entries for our 6 ingredients ONLY, if price is at or below the per-ingredient max listed above\n"
         #     f"- SELL: create_market_entry for ANY surplus ingredient (not in our 6) at a fair price\n"
+        #     f"- Total market purchases this turn must NOT exceed {market_budget:.0f} credits\n"
         #     f"- If nothing good is available, do nothing."
         # )
         # await self._run_agent("market", context, span_name="phase_waiting")

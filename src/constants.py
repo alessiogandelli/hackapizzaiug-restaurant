@@ -47,16 +47,19 @@ ALL_INGREDIENTS: set[str] = set(CORE_INGREDIENTS + ALT_INGREDIENTS + SUPPORT_ING
 #   (1 unit of each is usually enough for 1 serving of each recipe)
 # bid_price = price per unit (conservative)
 DEFAULT_BIDS = [
-    {"ingredient": "Polvere di Pulsar",     "quantity": 200, "bid": 42},
-    {"ingredient": "Foglie di Mandragora",  "quantity": 200, "bid": 38},
-    {"ingredient": "Spaghi del Sole",       "quantity": 200, "bid": 42},
-    {"ingredient": "Farina di Nettuno",     "quantity": 200, "bid": 58},
-    {"ingredient": "Plasma Vitale",         "quantity": 200, "bid": 92},
-    {"ingredient": "Essenza di Tachioni",   "quantity": 200, "bid": 98},
+    {"ingredient": "Polvere di Pulsar",     "quantity": 1, "bid": 42},
+    {"ingredient": "Foglie di Mandragora",  "quantity": 1, "bid": 38},
+    {"ingredient": "Spaghi del Sole",       "quantity": 1, "bid": 42},
+    {"ingredient": "Farina di Nettuno",     "quantity": 1, "bid": 58},
+    {"ingredient": "Plasma Vitale",         "quantity": 1, "bid": 92},
+    {"ingredient": "Essenza di Tachioni",   "quantity": 1, "bid": 98},
 ]
 
 # Max total we'll spend on bids per turn (absolute cap)
-MAX_BID_SPEND = 100000
+MAX_BID_SPEND = 1000
+
+# Max total we'll spend across ALL operations (bids + market) per turn
+MAX_TURN_SPEND = 1000
 
 # ═══════════════════════════════════════════════════════════════
 # DEFAULT STRATEGY  (planner will return something close to this)

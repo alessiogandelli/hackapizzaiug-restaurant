@@ -40,7 +40,7 @@ SMART_MODEL = "gpt-oss-120b"       # smart for serving (intolerance checking)
 SPEAKING_TOOLS = {"send_message", "save_menu", "update_restaurant_is_open"}
 BIDDING_TOOLS = {"closed_bid"}
 MARKET_TOOLS = {"create_market_entry", "execute_transaction", "delete_market_entry"}
-SERVING_TOOLS = {"prepare_dish", "serve_dish"}
+SERVING_TOOLS = {"prepare_dish", "serve_dish", "get_meals", "update_restaurant_is_open"}
 OPENER_TOOLS = {"update_restaurant_is_open"}
 
 # Tools all executor agents can read (info only)

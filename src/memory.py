@@ -34,6 +34,7 @@ class GameMemory:
     served_this_turn: list[dict] = field(default_factory=list)
     turn_balance_start: float = 0.0
     clients_served_this_turn: int = 0
+    turn_total_spent: float = 0.0
     messages_received: list[dict] = field(default_factory=list)
 
     # ── Recording methods ────────────────────────────────────
@@ -82,8 +83,18 @@ class GameMemory:
         logger.info("MEMORY | Turn %d result: delta=%.1f, served=%d, balance=%.1f→%.1f",
                      turn, delta, clients_served, balance_before, balance_after)
 
+    def record_spending(self, amount: float, label: str = "") -> None:
+        """Track spending for the current turn."""
+        self.turn_total_spent += amount
+        logger.info("MEMORY | Spent %.1f on %s (turn total: %.1f)", amount, label, self.turn_total_spent)
+
+    def remaining_turn_budget(self, max_turn_spend: float) -> float:
+        """How much we can still spend this turn."""
+        return max(0.0, max_turn_spend - self.turn_total_spent)
+
     def start_turn(self, balance: float) -> None:
         self.turn_balance_start = balance
+        self.turn_total_spent = 0.0
         logger.info("MEMORY | Turn started — balance_start=%.1f", balance)
 
     # ── Turn lifecycle ───────────────────────────────────────
@@ -93,6 +104,7 @@ class GameMemory:
         self.served_this_turn.clear()
         self.messages_received.clear()
         self.clients_served_this_turn = 0
+        self.turn_total_spent = 0.0
         logger.info("MEMORY | Turn data cleared")
 
     # ── Serialization ────────────────────────────────────────
@@ -106,6 +118,7 @@ class GameMemory:
             "served_this_turn": self.served_this_turn,
             "turn_balance_start": self.turn_balance_start,
             "clients_served_this_turn": self.clients_served_this_turn,
+            "turn_total_spent": self.turn_total_spent,
             "messages_received": self.messages_received,
         }
 

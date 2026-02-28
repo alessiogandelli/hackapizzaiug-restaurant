@@ -79,6 +79,12 @@ class GameState:
                     if extracted is not None:
                         logger.info("State: '%s' from API is dict, extracted list from key '%s'", field, k)
                         setattr(self, attr, extracted)
+                    elif all(isinstance(v, (int, float)) for v in val.values()):
+                        # Dict of {ingredient_name: quantity} — convert to list of dicts
+                        converted = [{"name": k, "quantity": int(v)} for k, v in val.items()]
+                        logger.info("State: '%s' from API is {name: qty} dict with %d entries → converted to list",
+                                    field, len(converted))
+                        setattr(self, attr, converted)
                     else:
                         logger.warning("State: '%s' from API is dict with no list inside: %r — treating as []",
                                        field, str(val)[:300])
