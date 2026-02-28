@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "hackapizzaiug-restaurant"
+version = "0.1.0"
+description = ""
+authors = ["alessiogandelli <alessiogandelli99@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = ">=3.12,<3.14"
+datapizza-ai = "^0.0.9"
+
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
