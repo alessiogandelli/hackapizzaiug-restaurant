@@ -1,11 +1,11 @@
 """Agent factory — builds all 5 agents with role-restricted tool subsets.
 
-Architecture:
-    StrategicPlanner  (120b, no tools)  — brain
-    SpeakingAgent     (20b, messaging)  — psychology
-    BiddingAgent      (20b, closed_bid) — math
-    MarketAgent       (20b, market ops) — arbitrage
-    ServingAgent      (20b, serving)    — risk-control
+Simplified architecture:
+    StrategicPlanner  (20b, no tools)   — outputs conservative JSON strategy
+    SpeakingAgent     (20b, save_menu)  — sets fixed menu
+    BiddingAgent      (20b, closed_bid) — submits pre-computed bids
+    MarketAgent       (20b, market ops) — defensive trades
+    ServingAgent      (120b, serving)   — critical: intolerance checking
 """
 from __future__ import annotations
 
@@ -32,14 +32,14 @@ from src.prompts import (
 logger = logging.getLogger(__name__)
 
 # ── Model config ─────────────────────────────────────────────
-PLANNER_MODEL = "gpt-oss-120b"     # big brain for strategic planning
-EXECUTOR_MODEL = "gpt-oss-120b"     # fast + cheap for execution
+FAST_MODEL = "gpt-oss-20b"         # cheap for simple tasks
+SMART_MODEL = "gpt-oss-120b"       # smart for serving (intolerance checking)
 
 # ── Tool name sets per agent ─────────────────────────────────
-SPEAKING_TOOLS = {"send_message", "save_menu"}
+SPEAKING_TOOLS = {"send_message", "save_menu", "update_restaurant_is_open"}
 BIDDING_TOOLS = {"closed_bid"}
 MARKET_TOOLS = {"create_market_entry", "execute_transaction", "delete_market_entry"}
-SERVING_TOOLS = {"prepare_dish", "serve_dish", "update_restaurant_is_open"}
+SERVING_TOOLS = {"prepare_dish", "serve_dish"}
 
 # Tools all executor agents can read (info only)
 INFO_TOOLS = {"restaurant_info", "get_meals"}
@@ -71,69 +71,64 @@ def _filter_tools(all_tools: list, allowed_names: set) -> list:
 
 
 def build_agents() -> dict[str, Agent]:
-    """Build and return all 5 agents with role-restricted tool access.
-
-    Returns:
-        Dict with keys: planner, speaking, bidding, market, serving
-    """
+    """Build and return all 5 agents with role-restricted tool access."""
     # Load tools once, share filtered subsets
     all_tools = _load_mcp_tools()
 
-    # Create separate LLM clients for planner vs executors
-    planner_client = _build_client(PLANNER_MODEL)
-    executor_client = _build_client(EXECUTOR_MODEL)
+    fast_client = _build_client(FAST_MODEL)
+    smart_client = _build_client(SMART_MODEL)
 
-    # ── StrategicPlanner (NO tools, big model) ───────────────
+    # ── StrategicPlanner (NO tools, fast model) ──────────────
     planner = Agent(
         name="StrategicPlanner",
-        client=planner_client,
+        client=fast_client,
         system_prompt=PLANNER_PROMPT,
-        tools=[],                   # no tools — pure reasoning
-        max_steps=3,
-        planning_interval=0,        # no re-planning needed
+        tools=[],
+        max_steps=2,
+        planning_interval=0,
     )
 
-    # ── SpeakingAgent ────────────────────────────────────────
+    # ── SpeakingAgent (just sets menu) ───────────────────────
     speaking_tools = _filter_tools(all_tools, SPEAKING_TOOLS | INFO_TOOLS)
     speaking = Agent(
         name="SpeakingAgent",
-        client=executor_client,
+        client=fast_client,
         system_prompt=SPEAKING_PROMPT,
         tools=speaking_tools,
-        max_steps=5,
+        max_steps=3,
         planning_interval=0,
     )
 
-    # ── BiddingAgent ─────────────────────────────────────────
+    # ── BiddingAgent (just submits bids) ─────────────────────
     bidding_tools = _filter_tools(all_tools, BIDDING_TOOLS | INFO_TOOLS)
     bidding = Agent(
         name="BiddingAgent",
-        client=executor_client,
+        client=fast_client,
         system_prompt=BIDDING_PROMPT,
         tools=bidding_tools,
+        max_steps=3,
+        planning_interval=0,
+    )
+
+    # ── MarketAgent (defensive trades) ───────────────────────
+    market_tools = _filter_tools(all_tools, MARKET_TOOLS | INFO_TOOLS)
+    market = Agent(
+        name="MarketAgent",
+        client=fast_client,
+        system_prompt=MARKET_PROMPT,
+        tools=market_tools,
         max_steps=5,
         planning_interval=0,
     )
 
-    # ── MarketAgent ──────────────────────────────────────────
-    market_tools = _filter_tools(all_tools, MARKET_TOOLS | INFO_TOOLS)
-    market = Agent(
-        name="MarketAgent",
-        client=executor_client,
-        system_prompt=MARKET_PROMPT,
-        tools=market_tools,
-        max_steps=8,
-        planning_interval=0,
-    )
-
-    # ── ServingAgent ─────────────────────────────────────────
+    # ── ServingAgent (SMART model — critical for safety) ─────
     serving_tools = _filter_tools(all_tools, SERVING_TOOLS | INFO_TOOLS)
     serving = Agent(
         name="ServingAgent",
-        client=executor_client,
+        client=smart_client,
         system_prompt=SERVING_PROMPT,
         tools=serving_tools,
-        max_steps=10,               # needs more steps for multiple clients
+        max_steps=8,
         planning_interval=0,
     )
 
@@ -146,8 +141,8 @@ def build_agents() -> dict[str, Agent]:
     }
 
     for name, ag in agents.items():
+        model = SMART_MODEL if name == "serving" else FAST_MODEL
         tool_names = [t.name for t in ag._tools] if ag._tools else []
-        logger.info("Built %s — model=%s, tools=%s",
-                     name, PLANNER_MODEL if name == "planner" else EXECUTOR_MODEL, tool_names)
+        logger.info("Built agent [%s] — model=%s, tools=%s", name, model, tool_names)
 
     return agents

@@ -6,6 +6,9 @@ __pycache__/
 # SSE lock file
 sse.lock
 
+# Game logs
+logs/
+
 # C extensions
 *.so
 

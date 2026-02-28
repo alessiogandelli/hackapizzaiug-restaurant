@@ -4,9 +4,13 @@ Note: Transient cross-agent state (pending_clients, prepared_dishes, strategy)
 lives in GameMemory, not here. This class tracks only what the server tells us.
 """
 from __future__ import annotations
+import json
 import logging
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
 
 
 class GameState:
@@ -90,3 +94,37 @@ class GameState:
         menu_len = len(self.menu) if isinstance(self.menu, list) else f"?({type(self.menu).__name__})"
         logger.info("State refreshed — balance=%.1f, inv=%s items, menu=%s items, turn=%s",
                      self.balance, inv_len, menu_len, self.turn_id)
+
+    def save_to_file(self) -> None:
+        """Save current state to logs/state.json for debugging."""
+        LOGS_DIR.mkdir(exist_ok=True)
+        path = LOGS_DIR / "state.json"
+        try:
+            inv_summary = []
+            for item in (self.inventory if isinstance(self.inventory, list) else []):
+                if isinstance(item, dict):
+                    name = item.get("name") or item.get("ingredient_name", "?")
+                    qty = item.get("quantity", 1)
+                    inv_summary.append(f"{name} x{qty}")
+                elif isinstance(item, str):
+                    inv_summary.append(item)
+
+            menu_summary = []
+            for item in (self.menu if isinstance(self.menu, list) else []):
+                if isinstance(item, dict):
+                    menu_summary.append({"name": item.get("name", "?"), "price": item.get("price", 0)})
+
+            data = {
+                "phase": self.phase,
+                "turn_id": self.turn_id,
+                "balance": round(self.balance, 1),
+                "is_open": self.is_open,
+                "inventory_count": len(self.inventory) if isinstance(self.inventory, list) else 0,
+                "inventory": inv_summary,
+                "menu": menu_summary,
+            }
+            with open(path, "w") as f:
+                json.dump(data, f, indent=2, default=str)
+            logger.debug("State saved to %s", path.name)
+        except Exception as exc:
+            logger.warning("Failed to save state: %s", exc)

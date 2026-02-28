@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from pathlib import Path
 
 from datapizza.tracing import DatapizzaMonitoringInstrumentor
 
@@ -15,9 +16,13 @@ from src.config import (
 from src.state import GameState
 from src.memory import GameMemory
 from src.sse import listen_sse
-from src.api import get_restaurant_info, get_recipes, get_meals
+from src.api import get_restaurant_info
 from src.agents import build_agents
 from src.orchestrator import PhaseController
+
+# ── Logs directory ───────────────────────────────────────────
+LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
+LOGS_DIR.mkdir(exist_ok=True)
 
 # ── Monitoring ───────────────────────────────────────────────
 _instrumentor = DatapizzaMonitoringInstrumentor(
@@ -57,10 +62,39 @@ class _Fmt(logging.Formatter):
         )
 
 
+# Console handler (coloured)
 _handler = logging.StreamHandler()
 _handler.setFormatter(_Fmt())
-logging.root.handlers = [_handler]
+
+# File handler (plain text, full detail)
+_file_handler = logging.FileHandler(LOGS_DIR / "game.log", mode="a")
+_file_handler.setFormatter(logging.Formatter(
+    "%(asctime)s %(levelname)-5s [%(name)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+))
+
+logging.root.handlers = [_handler, _file_handler]
 logging.root.setLevel(logging.INFO)
+
+
+def setup_turn_log_file(turn_id: int) -> None:
+    """Switch logging to a new file for the current turn."""
+    global _file_handler
+    
+    # Remove old file handler if it exists
+    if _file_handler in logging.root.handlers:
+        logging.root.handlers.remove(_file_handler)
+        _file_handler.close()
+    
+    # Create new file handler for this turn
+    log_file = LOGS_DIR / f"turn_{turn_id}.log"
+    _file_handler = logging.FileHandler(log_file, mode="a")
+    _file_handler.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)-5s [%(name)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+    logging.root.handlers.append(_file_handler)
+    logger.info("📝 Logging to %s", log_file.name)
 
 # Silence noisy third-party loggers
 for _quiet in ("aiohttp", "urllib3", "httpcore", "httpx", "openai"):
@@ -168,10 +202,22 @@ async def dispatch_events(event_queue: asyncio.Queue):
 
         try:
             if etype == "game_started":
+                # Parse turn_id from the event payload
+                new_turn_id = data.get("turn_id")
+                if new_turn_id is not None:
+                    state.turn_id = new_turn_id
+                    setup_turn_log_file(state.turn_id)
                 logger.info("")
-                logger.info("\U0001f3ae ══════ GAME STARTED  (turn %d) ══════", state.turn_id + 1)
-                state.turn_id += 1
+                logger.info("\U0001f3ae ══════ GAME STARTED  (turn %d) ══════", state.turn_id)
                 await refresh_state()
+
+                # Run SpeakingAgent immediately to set menu + open restaurant
+                if controller is not None:
+                    logger.info("🚀 Running SpeakingAgent at game start …")
+                    with tracer.start_as_current_span("game_start_speaking"):
+                        await controller.handle_phase("speaking")
+                else:
+                    logger.warning("Controller not ready — cannot run SpeakingAgent at game start")
 
             elif etype == "game_phase_changed":
                 phase = data.get("phase") or data.get("value", "")
