@@ -1,35 +1,22 @@
-"""Recipe utilities — simplified for our fixed 5-recipe strategy.
+"""Recipe utilities — dynamic menu building from /recipes + inventory.
 
-Only keeps helpers actually needed: recipe summary for serving context,
-and missing ingredient computation for bidding.
+Core flow:
+1. Fetch all recipes from the server (/recipes)
+2. Check current inventory
+3. Find which recipes we can actually make (have ALL ingredients)
+4. Build menu from feasible recipes
 """
 from __future__ import annotations
 
 import json
 import logging
-from src.constants import OUR_RECIPE_NAMES, ALL_INGREDIENTS
+from src.constants import ALL_INGREDIENTS
 
 logger = logging.getLogger(__name__)
 
 
-def get_our_recipes_from_server(all_recipes: list[dict]) -> list[dict]:
-    """Filter the server's full recipe list to just our 5 recipes."""
-    ours = []
-    for r in all_recipes:
-        if not isinstance(r, dict):
-            continue
-        name = r.get("name", "")
-        if name in OUR_RECIPE_NAMES:
-            ours.append(r)
-    logger.info("RECIPES | Found %d/%d of our recipes on server", len(ours), len(OUR_RECIPE_NAMES))
-    return ours
-
-
-def compute_missing_ingredients(inventory: list[dict]) -> dict[str, int]:
-    """Return {ingredient_name: count_in_stock} for ingredients we care about.
-
-    The orchestrator uses this to decide what to bid on.
-    """
+def get_inventory_stock(inventory: list[dict]) -> dict[str, int]:
+    """Parse inventory into {ingredient_name: quantity}."""
     stock: dict[str, int] = {}
     for item in inventory:
         if isinstance(item, str):
@@ -43,8 +30,104 @@ def compute_missing_ingredients(inventory: list[dict]) -> dict[str, int]:
         if name:
             key = name.strip()
             stock[key] = stock.get(key, 0) + qty
+    return stock
 
-    # Only return stock for ingredients we care about
+
+def extract_recipe_ingredients(recipe: dict) -> list[dict]:
+    """Extract ingredient list from a recipe dict.
+    
+    Returns list of {"name": str, "quantity": int}.
+    """
+    raw_ings = recipe.get("ingredients", [])
+    result = []
+    if not isinstance(raw_ings, list):
+        return result
+    for ing in raw_ings:
+        if isinstance(ing, str):
+            result.append({"name": ing, "quantity": 1})
+        elif isinstance(ing, dict):
+            name = ing.get("name") or ing.get("ingredient_name") or ing.get("ingredient", "")
+            qty = ing.get("quantity", 1)
+            if name:
+                result.append({"name": name.strip(), "quantity": qty})
+    return result
+
+
+def find_feasible_recipes(all_recipes: list[dict], inventory: list[dict]) -> list[dict]:
+    """Given server recipes and our inventory, return recipes we CAN make.
+    
+    A recipe is feasible if we have ALL its ingredients in sufficient quantity.
+    Returns a list of recipe dicts, each augmented with '_ingredients_parsed'.
+    """
+    stock = get_inventory_stock(inventory)
+    feasible = []
+    
+    for recipe in all_recipes:
+        if not isinstance(recipe, dict):
+            continue
+        name = recipe.get("name", "")
+        if not name:
+            continue
+        
+        ingredients = extract_recipe_ingredients(recipe)
+        if not ingredients:
+            logger.debug("Recipe '%s' has no ingredients — skipping", name)
+            continue
+        
+        # Check if we have ALL ingredients
+        can_make = True
+        for ing in ingredients:
+            ing_name = ing["name"]
+            needed = ing["quantity"]
+            have = stock.get(ing_name, 0)
+            if have < needed:
+                can_make = False
+                break
+        
+        if can_make:
+            recipe_copy = dict(recipe)
+            recipe_copy["_ingredients_parsed"] = ingredients
+            feasible.append(recipe_copy)
+            logger.info("RECIPE FEASIBLE | %s (needs: %s)", 
+                       name, ", ".join(f"{i['name']}x{i['quantity']}" for i in ingredients))
+        else:
+            logger.debug("RECIPE NOT FEASIBLE | %s (missing ingredients)", name)
+    
+    logger.info("RECIPES | %d feasible out of %d total recipes", len(feasible), len(all_recipes))
+    return feasible
+
+
+def build_menu_from_feasible(feasible_recipes: list[dict], default_price: int = 400) -> list[dict]:
+    """Build menu items from feasible recipes.
+    
+    Returns [{"name": "exact recipe name", "price": N}, ...]
+    Menu uses EXACT recipe names from the server (case-sensitive).
+    """
+    menu = []
+    for recipe in feasible_recipes:
+        name = recipe.get("name", "")
+        # Use recipe's price if available, otherwise default
+        price = recipe.get("price") or recipe.get("selling_price") or default_price
+        menu.append({"name": name, "price": price})
+    
+    logger.info("MENU BUILT | %d items: %s", len(menu), 
+               [f"{m['name']} @ {m['price']}" for m in menu])
+    return menu
+
+
+def build_recipe_ingredients_map(feasible_recipes: list[dict]) -> dict[str, list[str]]:
+    """Build {recipe_name: [ingredient_names]} for feasible recipes."""
+    mapping = {}
+    for recipe in feasible_recipes:
+        name = recipe.get("name", "")
+        ingredients = recipe.get("_ingredients_parsed") or extract_recipe_ingredients(recipe)
+        mapping[name] = [ing["name"] for ing in ingredients]
+    return mapping
+
+
+def compute_missing_ingredients(inventory: list[dict]) -> dict[str, int]:
+    """Return {ingredient_name: count_in_stock} for ALL known ingredients."""
+    stock = get_inventory_stock(inventory)
     return {ing: stock.get(ing, 0) for ing in ALL_INGREDIENTS}
 
 

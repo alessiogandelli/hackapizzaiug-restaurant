@@ -23,10 +23,10 @@ from src.config import (
 )
 from src.prompts import (
     PLANNER_PROMPT,
-    SPEAKING_PROMPT,
+    build_speaking_prompt,
     BIDDING_PROMPT,
     MARKET_PROMPT,
-    SERVING_PROMPT,
+    build_serving_prompt,
     OPENER_PROMPT,
 )
 
@@ -97,12 +97,13 @@ def build_agents() -> dict[str, Agent]:
                    tools=opener_tools, 
                    max_steps=1)
 
-    # ── SpeakingAgent (just sets menu) ───────────────────────
+    # ── SpeakingAgent (sets dynamic menu) ─────────────────────
     speaking_tools = _filter_tools(all_tools, SPEAKING_TOOLS | INFO_TOOLS)
+    # Start with empty menu prompt — will be updated by orchestrator at runtime
     speaking = Agent(
         name="SpeakingAgent",
         client=fast_client,
-        system_prompt=SPEAKING_PROMPT,
+        system_prompt=build_speaking_prompt([]),
         tools=speaking_tools,
         max_steps=3,
         planning_interval=0,
@@ -132,12 +133,13 @@ def build_agents() -> dict[str, Agent]:
 
     # ── ServingAgent (SMART model — critical for safety) ─────
     serving_tools = _filter_tools(all_tools, SERVING_TOOLS | INFO_TOOLS)
+    # Start with empty recipe prompt — will be updated by orchestrator at runtime
     serving = Agent(
         name="ServingAgent",
         client=smart_client,
-        system_prompt=SERVING_PROMPT,
+        system_prompt=build_serving_prompt({}, []),
         tools=serving_tools,
-        max_steps=8,
+        max_steps=15,
         planning_interval=0,
     )
 
