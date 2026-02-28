@@ -84,15 +84,25 @@ async def _parse_line(raw: bytes) -> dict | None:
     try:
         event_json = json.loads(line)
     except json.JSONDecodeError:
-        logger.info("SSE raw: %s", line[:200])
+        logger.warning("SSE json parse FAILED — raw line: %r", line[:500])
         return None
+
+    if not isinstance(event_json, dict):
+        logger.warning("SSE parsed JSON is not a dict — type=%s, value=%r", type(event_json).__name__, str(event_json)[:300])
+        return {"type": "unknown", "data": {"value": event_json}}
 
     event_type = event_json.get("type", "unknown")
     event_data = event_json.get("data", {})
-    if not isinstance(event_data, dict):
-        event_data = {"value": event_data}
 
-    return {"type": event_type, "data": event_data}
+    logger.debug("SSE parsed — type=%s, data type=%s, data=%s",
+                 event_type, type(event_data).__name__, str(event_data)[:300])
+
+    if isinstance(event_data, dict):
+        return {"type": event_type, "data": event_data}
+    else:
+        logger.info("SSE data is not dict — wrapping. type=%s, event_type=%s, raw_data=%r",
+                     type(event_data).__name__, event_type, str(event_data)[:300])
+        return {"type": event_type, "data": {"value": event_data}}
 
 
 # ── Public entry point ───────────────────────────────────────

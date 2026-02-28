@@ -1,15 +1,33 @@
 """HTTP helpers — wrappers around the game-server REST endpoints."""
 import aiohttp
 import json
+import logging
 from src.config import SERVER_URL, HEADERS, RESTAURANT_ID
+
+logger = logging.getLogger(__name__)
 
 
 async def _get(path: str, params: dict | None = None) -> dict | list:
     """Generic authenticated GET against the game server."""
-    async with aiohttp.ClientSession(headers=HEADERS) as session:
-        async with session.get(f"{SERVER_URL}{path}", params=params) as resp:
-            resp.raise_for_status()
-            return await resp.json()
+    url = f"{SERVER_URL}{path}"
+    try:
+        async with aiohttp.ClientSession(headers=HEADERS) as session:
+            async with session.get(url, params=params) as resp:
+                status = resp.status
+                if status != 200:
+                    body = await resp.text()
+                    logger.error("API %s returned HTTP %d: %s", path, status, body[:500])
+                resp.raise_for_status()
+                data = await resp.json()
+                logger.debug("API %s → type=%s, %s",
+                             path, type(data).__name__,
+                             f"len={len(data)}" if isinstance(data, (list, dict)) else f"value={str(data)[:200]}")
+                return data
+    except aiohttp.ClientResponseError:
+        raise  # already logged above
+    except Exception as exc:
+        logger.error("API %s request failed: %s (%s)", path, exc, type(exc).__name__)
+        raise
 
 
 # ── Public helpers ───────────────────────────────────────────

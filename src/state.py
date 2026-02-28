@@ -1,4 +1,8 @@
-"""Game state tracker — single source of truth for the current turn."""
+"""Game state tracker — single source of truth for raw game server state.
+
+Note: Transient cross-agent state (pending_clients, prepared_dishes, strategy)
+lives in GameMemory, not here. This class tracks only what the server tells us.
+"""
 from __future__ import annotations
 import logging
 
@@ -6,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 class GameState:
-    """Mutable singleton that tracks the game's evolving state."""
+    """Mutable singleton that mirrors the game server's view of our restaurant."""
 
     def __init__(self):
         self.phase: str = "stopped"       # speaking | closed_bid | waiting | serving | stopped
@@ -16,31 +20,73 @@ class GameState:
         self.inventory: list[dict] = []
         self.menu: list[dict] = []
         self.balance: float = 0.0
-        self.pending_clients: list[dict] = []      # clients waiting to be served
-        self.prepared_dishes: list[str] = []        # dishes ready to serve
+        self.is_open: bool = True
 
     # ── Convenience ──────────────────────────────────────────
     def summary(self) -> str:
-        """One-paragraph description the agent can reason about."""
-        clients_txt = ", ".join(
-            f"{c.get('clientName','?')} (order: {c.get('orderText','?')})"
-            for c in self.pending_clients
-        ) or "none"
+        """One-paragraph description any agent can reason about."""
+        inv_names = [
+            f"{i.get('name', i.get('ingredient_name', '?'))} x{i.get('quantity', 1)}"
+            for i in self.inventory[:15]
+        ]
+        menu_names = [m.get("name", "?") for m in self.menu[:10]]
 
         return (
             f"Phase: {self.phase} | Turn: {self.turn_id} | "
-            f"Balance: {self.balance} | "
-            f"Inventory items: {len(self.inventory)} | "
-            f"Menu items: {len(self.menu)} | "
-            f"Pending clients: {clients_txt} | "
-            f"Prepared dishes: {self.prepared_dishes}"
+            f"Balance: {self.balance:.1f} | "
+            f"Open: {self.is_open} | "
+            f"Inventory ({len(self.inventory)}): {inv_names} | "
+            f"Menu ({len(self.menu)}): {menu_names}"
         )
 
     def update_from_restaurant_info(self, info: dict):
         """Refresh local cache from /restaurant/:id response."""
+        if not isinstance(info, dict):
+            logger.error("update_from_restaurant_info: expected dict, got %s — %r",
+                         type(info).__name__, str(info)[:300])
+            return
+
         self.restaurant_info = info
         self.balance = info.get("balance", self.balance)
-        self.inventory = info.get("inventory", self.inventory)
-        self.menu = info.get("menu", self.menu)
+
+        # Validate list fields — API sometimes returns unexpected types
+        for field, attr in [("inventory", "inventory"), ("menu", "menu")]:
+            val = info.get(field)
+            if val is None:
+                continue  # keep existing
+            if isinstance(val, list):
+                setattr(self, attr, val)
+            elif isinstance(val, dict):
+                # API quirks: inventory can be {} (empty), menu can be {'items': [...]}
+                if not val:
+                    # empty dict → empty list
+                    logger.info("State: '%s' from API is empty dict → treating as []", field)
+                    setattr(self, attr, [])
+                elif "items" in val and isinstance(val["items"], list):
+                    logger.info("State: '%s' from API is dict with 'items' key → unwrapping", field)
+                    setattr(self, attr, val["items"])
+                else:
+                    # dict with unknown structure — try to extract any list value
+                    extracted = None
+                    for k, v in val.items():
+                        if isinstance(v, list):
+                            extracted = v
+                            break
+                    if extracted is not None:
+                        logger.info("State: '%s' from API is dict, extracted list from key '%s'", field, k)
+                        setattr(self, attr, extracted)
+                    else:
+                        logger.warning("State: '%s' from API is dict with no list inside: %r — treating as []",
+                                       field, str(val)[:300])
+                        setattr(self, attr, [])
+            else:
+                logger.error("State: '%s' from API is %s, not list! value=%r — keeping old value",
+                             field, type(val).__name__, str(val)[:300])
+
         self.turn_id = info.get("turn_id", self.turn_id)
-        logger.info("State refreshed — balance=%.1f, inv=%d items", self.balance, len(self.inventory))
+        self.is_open = info.get("is_open", self.is_open)
+
+        inv_len = len(self.inventory) if isinstance(self.inventory, list) else f"?({type(self.inventory).__name__})"
+        menu_len = len(self.menu) if isinstance(self.menu, list) else f"?({type(self.menu).__name__})"
+        logger.info("State refreshed — balance=%.1f, inv=%s items, menu=%s items, turn=%s",
+                     self.balance, inv_len, menu_len, self.turn_id)

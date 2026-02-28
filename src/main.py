@@ -1,4 +1,4 @@
-"""Main entry point — event loop that connects SSE → state → agent."""
+"""Main entry point — event loop that connects SSE → state → orchestrator → agents."""
 from __future__ import annotations
 import asyncio
 import json
@@ -13,9 +13,11 @@ from src.config import (
     DATAPIZZA_OTLP_ENDPOINT,
 )
 from src.state import GameState
+from src.memory import GameMemory
 from src.sse import listen_sse
 from src.api import get_restaurant_info, get_recipes, get_meals
-from src.agent import build_agent
+from src.agents import build_agents
+from src.orchestrator import PhaseController
 
 # ── Monitoring ───────────────────────────────────────────────
 _instrumentor = DatapizzaMonitoringInstrumentor(
@@ -68,7 +70,8 @@ logger = logging.getLogger("hackapizza")
 
 # ── Globals ──────────────────────────────────────────────────
 state = GameState()
-agent = None  # built lazily after imports are verified
+memory = GameMemory()
+controller: PhaseController | None = None  # built lazily after agents init
 
 
 # ── Event handlers ───────────────────────────────────────────
@@ -91,86 +94,49 @@ PHASE_ICONS = {
 
 
 async def on_phase_changed(phase: str):
-    """React to a new game phase."""
-    state.phase = phase
+    """React to a new game phase — delegate to PhaseController."""
     icon = PHASE_ICONS.get(phase, "❓")
     logger.info("")
     logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     logger.info("  %s  PHASE → %s", icon, phase.upper())
     logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
-    if phase == "stopped":
-        # Reset per-turn transient data
-        state.pending_clients.clear()
-        state.prepared_dishes.clear()
+    if controller is None:
+        logger.warning("Controller not ready — skipping phase %s", phase)
         return
 
-    # Refresh state at every phase transition
-    await refresh_state()
-
-    # Load recipes once (they don't change between turns)
-    if not state.recipes:
-        try:
-            state.recipes = await get_recipes()
-            logger.info("Loaded %d recipes", len(state.recipes))
-        except Exception as exc:
-            logger.warning("Could not load recipes: %s", exc)
-
-    # Ask the agent what to do
     with tracer.start_as_current_span(f"phase_{phase}"):
-        await ask_agent(f"The phase just changed to '{phase}'. Decide what actions to take.")
+        await controller.handle_phase(phase)
 
 
 async def on_client_spawned(data: dict):
     """A new client has arrived during serving phase."""
-    state.pending_clients.append(data)
     client_name = data.get("clientName", "unknown")
     order = data.get("orderText", "")
-    logger.info("\U0001f9d1 Client  %s  →  \"%s\"", client_name, order)
+    intolerances = data.get("intolerances", [])
+    logger.info("\U0001f9d1 Client  %s  →  \"%s\"  intolerances=%s", client_name, order, intolerances)
+
+    if controller is None:
+        logger.warning("Controller not ready — cannot serve client")
+        return
 
     with tracer.start_as_current_span("serve_client") as span:
         span.set_attribute("client.name", client_name)
         span.set_attribute("client.order", order)
-        await ask_agent(
-            f"A new client '{client_name}' just arrived with this order: \"{order}\". "
-            f"Decide how to serve them (prepare_dish then serve_dish)."
-        )
+        await controller.handle_client(data)
 
 
 async def on_preparation_complete(data: dict):
     """A dish has finished cooking."""
     dish = data.get("dish", "")
-    state.prepared_dishes.append(dish)
     logger.info("\u2705 Dish ready  →  %s", dish)
+
+    if controller is None:
+        return
 
     with tracer.start_as_current_span("serve_prepared_dish") as span:
         span.set_attribute("dish.name", dish)
-        await ask_agent(
-            f"The dish '{dish}' is now ready. Serve it to the appropriate waiting client."
-        )
-
-
-async def ask_agent(prompt: str):
-    """Run the agent with the current game context."""
-    global agent
-    if agent is None:
-        return
-
-    context = (
-        f"GAME STATE:\n{state.summary()}\n\n"
-        f"RECIPES AVAILABLE: {json.dumps(state.recipes[:10], default=str)}\n\n"  # first 10 for token budget
-        f"YOUR TASK:\n{prompt}"
-    )
-
-    try:
-        logger.info("\U0001f916 Agent  ←  %s", prompt[:100])
-        with tracer.start_as_current_span("agent_run") as span:
-            span.set_attribute("agent.prompt", prompt[:200])
-            result = await agent.a_run(context)
-            span.set_attribute("agent.response", result.text[:200] if result.text else "")
-        logger.info("\U0001f916 Agent  →  %s", result.text[:200] if result.text else "(no text)")
-    except Exception as exc:
-        logger.exception("Agent error: %s", exc)
+        await controller.handle_preparation_complete(data)
 
 
 # ── Event dispatcher ─────────────────────────────────────────
@@ -179,10 +145,26 @@ async def dispatch_events(event_queue: asyncio.Queue):
     while True:
         event = await event_queue.get()
         etype = event.get("type", "")
-        data = event.get("data", {})
+        raw_data = event.get("data", {})
+
+        if etype != "heartbeat":
+            logger.debug("📦 Raw event — type=%s, data type=%s, data=%r",
+                         etype, type(raw_data).__name__, str(raw_data)[:500])
+
+        # Normalize: SSE parser wraps strings as {"value": ...}, but some
+        # events arrive as raw strings.  Ensure `data` is always a dict.
+        if isinstance(raw_data, str):
+            logger.info("⚠️  Event '%s' data is str, wrapping: %r", etype, raw_data[:200])
+            data = {"value": raw_data}
+        elif isinstance(raw_data, dict):
+            data = raw_data
+        else:
+            logger.info("⚠️  Event '%s' data is %s, wrapping: %r",
+                        etype, type(raw_data).__name__, str(raw_data)[:200])
+            data = {"value": raw_data}
         
         if etype != "heartbeat":
-            logger.info("\U0001f4e8 Event  %-22s  %s", etype, json.dumps(data, default=str)[:120])
+            logger.info("\U0001f4e8 Event  %-22s  %s", etype, json.dumps(data, default=str)[:200])
 
         try:
             if etype == "game_started":
@@ -192,27 +174,43 @@ async def dispatch_events(event_queue: asyncio.Queue):
                 await refresh_state()
 
             elif etype == "game_phase_changed":
-                await on_phase_changed(data.get("phase", ""))
+                phase = data.get("phase") or data.get("value", "")
+                logger.debug("  phase_changed — extracted phase=%r (type=%s) from data=%r",
+                             phase, type(phase).__name__, str(data)[:300])
+                if not isinstance(phase, str) or not phase:
+                    logger.error("  ⚠️  Invalid phase value! type=%s, value=%r, full data=%r",
+                                 type(phase).__name__, phase, str(data)[:500])
+                await on_phase_changed(phase)
 
             elif etype == "client_spawned":
+                logger.debug("  client_spawned — data type=%s, keys=%s, data=%r",
+                             type(data).__name__,
+                             list(data.keys()) if isinstance(data, dict) else 'N/A',
+                             str(data)[:500])
                 await on_client_spawned(data)
 
             elif etype == "preparation_complete":
+                logger.debug("  preparation_complete — data type=%s, data=%r",
+                             type(data).__name__, str(data)[:500])
                 await on_preparation_complete(data)
 
             elif etype == "message":
                 sender = data.get("sender", "?")
-                payload = data.get("payload", "")
+                payload = data.get("payload") or data.get("value", "")
                 logger.info("\U0001f4e2 Broadcast  %s  →  %s", sender, str(payload)[:160])
 
             elif etype == "new_message":
                 sender = data.get("senderName", "?")
-                text = data.get("text", "")
+                text = data.get("text") or data.get("value", "")
                 logger.info("\u2709\ufe0f  DM from %s  →  %s", sender, text[:160])
+                # Track incoming messages for planner/speaking agent
+                if memory is not None:
+                    memory.record_message(sender, text)
 
             elif etype == "game_reset":
                 logger.warning("\U0001f504 GAME RESET by organizers")
                 state.__init__()
+                memory.__init__()
 
             elif etype == "heartbeat":
                 pass  # silently ignore
@@ -221,26 +219,43 @@ async def dispatch_events(event_queue: asyncio.Queue):
                 logger.debug("Unhandled event type: %s", etype)
 
         except Exception as exc:
-            logger.exception("Error handling event %s: %s", etype, exc)
+            logger.exception(
+                "Error handling event %s: %s\n"
+                "  → event data type: %s\n"
+                "  → event data dump: %r\n"
+                "  → raw_data type: %s\n"
+                "  → raw_data dump: %r",
+                etype, exc,
+                type(data).__name__, str(data)[:500],
+                type(raw_data).__name__, str(raw_data)[:500],
+            )
 
 
 # ── Main ─────────────────────────────────────────────────────
 async def main():
-    global agent
+    global controller
 
     logger.info("")
     logger.info("\U0001f355 ═══════════════════════════════════════")
-    logger.info("\U0001f355  Hackapizza 2.0 — Restaurant Agent")
+    logger.info("\U0001f355  Hackapizza 2.0 — Multi-Agent System")
     logger.info("\U0001f355  ID: %s", RESTAURANT_ID)
+    logger.info("\U0001f355  Architecture: Planner → PhaseController → Specialists")
     logger.info("\U0001f355 ═══════════════════════════════════════")
     logger.info("")
 
-    # Build the agent (fetches MCP tools from the server)
+    # Build all agents (fetches MCP tools from the server)
     try:
-        agent = build_agent()
+        agents = build_agents()
+        controller = PhaseController(
+            agents=agents,
+            state=state,
+            memory=memory,
+            tracer=tracer,
+        )
+        logger.info("Multi-agent system ready — %d agents built", len(agents))
     except Exception as exc:
-        logger.error("Failed to build agent (is the server up?): %s", exc)
-        logger.info("Running in listen-only mode — will retry on next phase change")
+        logger.error("Failed to build agents (is the server up?): %s", exc)
+        logger.info("Running in listen-only mode — will retry on next restart")
 
     # SSE event queue
     event_queue: asyncio.Queue = asyncio.Queue()
