@@ -90,10 +90,11 @@ def build_agents() -> dict[str, Agent]:
         planning_interval=0,
     )
 
+    opener_tools = _filter_tools(all_tools, OPENER_TOOLS | INFO_TOOLS)
     opener = Agent( name="Opener", 
                    client=fast_client, 
                    system_prompt=OPENER_PROMPT, 
-                   tools=OPENER_TOOLS, 
+                   tools=opener_tools, 
                    max_steps=1)
 
     # ── SpeakingAgent (just sets menu) ───────────────────────

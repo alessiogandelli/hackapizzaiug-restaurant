@@ -10,35 +10,16 @@ from __future__ import annotations
 # ═══════════════════════════════════════════════════════════════
 
 MENU_ITEMS = [
-    {"name": "Sinfonia Cosmica di Proteine Interstellari", "price": 320},
-    {"name": "Cosmic Serenade",                            "price": 520},
-    {"name": "Sinfonia Temporale di Fenice e Xenodonte su Pane degli Abissi", "price": 580},
-    {"name": "Galassia di Sapore",                         "price": 400},
-    {"name": "Sinfonia Cosmica di Mare e Stelle",          "price": 500},
+    {"name": "Cosmic Synchrony: Il Destino di Pulsar", "price": 500},
 ]
 
 OUR_RECIPE_NAMES: set[str] = {item["name"] for item in MENU_ITEMS}
 
 # Full ingredient breakdown per recipe (for serving agent context)
 RECIPE_INGREDIENTS = {
-    "Sinfonia Cosmica di Proteine Interstellari": [
-        "Carne di Balena spaziale", "Pane degli Abissi", "Funghi dell'Etere", "Carne di Mucca",
-    ],
-    "Cosmic Serenade": [
-        "Carne di Balena spaziale", "Carne di Kraken", "Amido di Stellarion",
-        "Nettare di Sirena", "Essenza di Tachioni",
-    ],
-    "Sinfonia Temporale di Fenice e Xenodonte su Pane degli Abissi": [
-        "Carne di Balena spaziale", "Uova di Fenice", "Carne di Xenodonte",
-        "Pane degli Abissi", "Plasma Vitale",
-    ],
-    "Galassia di Sapore": [
-        "Carne di Balena spaziale", "Carne di Xenodonte", "Amido di Stellarion",
-        "Lattuga Namecciana", "Erba Pipa",
-    ],
-    "Sinfonia Cosmica di Mare e Stelle": [
-        "Carne di Balena spaziale", "Carne di Kraken", "Carne di Xenodonte",
-        "Salsa Szechuan", "Lacrime di Andromeda",
+    "Cosmic Synchrony: Il Destino di Pulsar": [
+        "Polvere di Pulsar", "Foglie di Mandragora", "Spaghi del Sole",
+        "Farina di Nettuno", "Plasma Vitale", "Essenza di Tachioni",
     ],
 }
 
@@ -46,16 +27,14 @@ RECIPE_INGREDIENTS = {
 # INGREDIENT CLASSIFICATION
 # ═══════════════════════════════════════════════════════════════
 
-CORE_INGREDIENTS = ["Carne di Balena spaziale"]
-
-ALT_INGREDIENTS = ["Carne di Kraken", "Uova di Fenice", "Carne di Xenodonte"]
-
-SUPPORT_INGREDIENTS = [
-    "Pane degli Abissi", "Amido di Stellarion", "Funghi dell'Etere",
-    "Carne di Mucca", "Nettare di Sirena", "Essenza di Tachioni",
-    "Plasma Vitale", "Lattuga Namecciana", "Erba Pipa",
-    "Salsa Szechuan", "Lacrime di Andromeda",
+CORE_INGREDIENTS = [
+    "Polvere di Pulsar", "Foglie di Mandragora", "Spaghi del Sole",
+    "Farina di Nettuno", "Plasma Vitale", "Essenza di Tachioni",
 ]
+
+ALT_INGREDIENTS = []
+
+SUPPORT_INGREDIENTS = []
 
 # All unique ingredients we ever need
 ALL_INGREDIENTS: set[str] = set(CORE_INGREDIENTS + ALT_INGREDIENTS + SUPPORT_INGREDIENTS)
@@ -68,28 +47,16 @@ ALL_INGREDIENTS: set[str] = set(CORE_INGREDIENTS + ALT_INGREDIENTS + SUPPORT_ING
 #   (1 unit of each is usually enough for 1 serving of each recipe)
 # bid_price = price per unit (conservative)
 DEFAULT_BIDS = [
-    # CORE — always bid, 40% budget
-    {"ingredient": "Carne di Balena spaziale", "quantity": 7, "bid": 60},
-    # ALT — bid on all three, 20% budget split
-    {"ingredient": "Carne di Kraken",          "quantity": 2, "bid": 20},
-    {"ingredient": "Uova di Fenice",           "quantity": 1, "bid": 25},
-    {"ingredient": "Carne di Xenodonte",       "quantity": 6, "bid": 20},
-    # SUPPORT — 40% budget split
-    {"ingredient": "Pane degli Abissi",        "quantity": 2, "bid": 15},
-    {"ingredient": "Amido di Stellarion",      "quantity": 2, "bid": 20},
-    {"ingredient": "Funghi dell'Etere",        "quantity": 1, "bid": 12},
-    {"ingredient": "Carne di Mucca",           "quantity": 3, "bid": 20},
-    {"ingredient": "Nettare di Sirena",        "quantity": 3, "bid": 15},
-    {"ingredient": "Essenza di Tachioni",      "quantity": 3, "bid": 20},
-    {"ingredient": "Plasma Vitale",            "quantity": 3, "bid": 20},
-    {"ingredient": "Lattuga Namecciana",       "quantity": 3, "bid": 20},
-    {"ingredient": "Erba Pipa",                "quantity": 3, "bid": 20},
-    {"ingredient": "Salsa Szechuan",           "quantity": 3, "bid": 20},
-    {"ingredient": "Lacrime di Andromeda",     "quantity": 3, "bid": 20},
+    {"ingredient": "Polvere di Pulsar",     "quantity": 200, "bid": 42},
+    {"ingredient": "Foglie di Mandragora",  "quantity": 200, "bid": 38},
+    {"ingredient": "Spaghi del Sole",       "quantity": 200, "bid": 42},
+    {"ingredient": "Farina di Nettuno",     "quantity": 200, "bid": 58},
+    {"ingredient": "Plasma Vitale",         "quantity": 200, "bid": 92},
+    {"ingredient": "Essenza di Tachioni",   "quantity": 200, "bid": 98},
 ]
 
 # Max total we'll spend on bids per turn (absolute cap)
-MAX_BID_SPEND = 500
+MAX_BID_SPEND = 100000
 
 # ═══════════════════════════════════════════════════════════════
 # DEFAULT STRATEGY  (planner will return something close to this)
@@ -105,7 +72,7 @@ DEFAULT_STRATEGY = {
 }
 
 # Max price we'll pay for an ingredient on the market
-MAX_MARKET_PRICE = 70
+MAX_MARKET_PRICE = 110
 
 # ═══════════════════════════════════════════════════════════════
 # MARKET PRICE ANALYSIS

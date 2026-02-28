@@ -222,7 +222,7 @@ class PhaseController:
                 logger.info("  %s: %d", ing, qty)
 
         # Build bid list: skip ingredients we already have enough of
-        budget = min(MAX_BID_SPEND, self.state.balance * 0.4)
+        budget = min(MAX_BID_SPEND, self.state.balance * 0.95)
         bids = []
         total_cost = 0.0
 
@@ -237,11 +237,9 @@ class PhaseController:
 
             need = want - have
             
-            # Use market-based pricing instead of hardcoded defaults
-            competitive_price = get_competitive_bid_price(
-                ing, market_prices, default=bid_template["bid"]
-            )
-            cost = need * competitive_price
+            # Use FIXED price from constants — do NOT adjust based on market history
+            fixed_price = bid_template["bid"]
+            cost = need * fixed_price
 
             if total_cost + cost > budget:
                 logger.info("  SKIP %s (budget exceeded: %.0f + %.0f > %.0f)", ing, total_cost, cost, budget)
@@ -250,11 +248,11 @@ class PhaseController:
             bids.append({
                 "ingredient": ing,  # CRITICAL: preserve exact capitalization
                 "quantity": need,
-                "bid": competitive_price,
+                "bid": fixed_price,
             })
             total_cost += cost
-            logger.info("  BID  %s: qty=%d, price=%d (market-adjusted, total: %.0f)", 
-                       ing, need, competitive_price, total_cost)
+            logger.info("  BID  %s: qty=%d, price=%d (fixed, total: %.0f)", 
+                       ing, need, fixed_price, total_cost)
 
         logger.info("FINAL BID: %d ingredients, total cost=%.0f, budget=%.0f", len(bids), total_cost, budget)
 
@@ -310,21 +308,29 @@ class PhaseController:
         logger.info("Still need: %s", needed[:10])
         logger.info("Surplus (not in our recipes): %s", surplus[:10])
 
-        # Build context for market agent
-        context = (
-            f"GAME STATE: {self.state.summary()}\n\n"
-            f"INGREDIENTS WE STILL NEED (have 0 in stock): {json.dumps(needed)}\n"
-            f"SURPLUS INGREDIENTS (not in our recipes): {json.dumps(surplus)}\n"
-            f"MAX BUY PRICE: {MAX_MARKET_PRICE} credits per unit\n"
-            f"CURRENT BALANCE: {self.state.balance}\n\n"
-            f"MARKET ENTRIES:\n{json.dumps(market_entries[:20], default=str)}\n\n"
-            f"TASK: Scan market entries.\n"
-            f"- BUY: execute_transaction on SELL entries for ingredients we need, if price < {MAX_MARKET_PRICE}\n"
-            f"- SELL: create_market_entry for surplus ingredients at 20-40 credits\n"
-            f"- If nothing good is available, do nothing."
-        )
+        # Market agent (buy/sell) is DISABLED — observation only
+        logger.info("Market agent disabled — skipping buy/sell actions")
 
-        await self._run_agent("market", context, span_name="phase_waiting")
+        # # Build context for market agent
+        # context = (
+        #     f"GAME STATE: {self.state.summary()}\n\n"
+        #     f"INGREDIENTS WE STILL NEED (have 0 in stock): {json.dumps(needed)}\n"
+        #     f"SURPLUS INGREDIENTS (not in our recipes): {json.dumps(surplus)}\n"
+        #     f"CURRENT BALANCE: {self.state.balance}\n\n"
+        #     f"MAX BUY PRICES PER INGREDIENT (do NOT exceed these):\n"
+        #     f"  - Polvere di Pulsar: 42 credits\n"
+        #     f"  - Foglie di Mandragora: 38 credits\n"
+        #     f"  - Spaghi del Sole: 42 credits\n"
+        #     f"  - Farina di Nettuno: 58 credits\n"
+        #     f"  - Plasma Vitale: 92 credits\n"
+        #     f"  - Essenza di Tachioni: 98 credits\n\n"
+        #     f"MARKET ENTRIES:\n{json.dumps(market_entries[:20], default=str)}\n\n"
+        #     f"TASK: Scan market entries.\n"
+        #     f"- BUY: execute_transaction on SELL entries for our 6 ingredients ONLY, if price is at or below the per-ingredient max listed above\n"
+        #     f"- SELL: create_market_entry for ANY surplus ingredient (not in our 6) at a fair price\n"
+        #     f"- If nothing good is available, do nothing."
+        # )
+        # await self._run_agent("market", context, span_name="phase_waiting")
 
     async def _handle_serving_phase(self) -> None:
         """Serving start: restaurant should already be open (from speaking phase)."""
