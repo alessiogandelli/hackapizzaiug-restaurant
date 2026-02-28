@@ -83,6 +83,7 @@ class PhaseController:
 
         try:
             if phase == "speaking":
+                print('Running Speaking phase handler')
                 await self._handle_speaking()
             elif phase == "closed_bid":
                 await self._handle_bidding()
@@ -173,6 +174,8 @@ class PhaseController:
             await self._run_planner()
             self._planner_ran_this_turn = True
             self.memory.start_turn(self.state.balance)
+        
+        self._run_agent("opener", "You must call update_restaurant_is_open with is_open=true to open the restaurant.", span_name="phase_opener")
 
         # Log what we're about to set
         logger.info("MENU to set:")

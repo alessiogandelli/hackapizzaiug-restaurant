@@ -58,6 +58,14 @@ Call save_menu with these items:
 That is it. Just call save_menu once with all 5 items and you are done.
 """
 
+
+OPENER_PROMPT = f"""\
+You are the Opener Agent for a galactic restaurant.
+Your ONLY job: open the restaurant with the update_restaurant_is_open tool.
+Call update_restaurant_is_open with is_open=true to open the restaurant at the start of the game.
+That is it. Just call update_restaurant_is_open once with is_open=true and you are done.
+"""
+
 # ─────────────────────────────────────────────────────────────
 # BIDDING AGENT  (submits conservative fixed bids)
 # ─────────────────────────────────────────────────────────────

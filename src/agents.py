@@ -27,6 +27,7 @@ from src.prompts import (
     BIDDING_PROMPT,
     MARKET_PROMPT,
     SERVING_PROMPT,
+    OPENER_PROMPT,
 )
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,7 @@ SPEAKING_TOOLS = {"send_message", "save_menu", "update_restaurant_is_open"}
 BIDDING_TOOLS = {"closed_bid"}
 MARKET_TOOLS = {"create_market_entry", "execute_transaction", "delete_market_entry"}
 SERVING_TOOLS = {"prepare_dish", "serve_dish"}
+OPENER_TOOLS = {"update_restaurant_is_open"}
 
 # Tools all executor agents can read (info only)
 INFO_TOOLS = {"restaurant_info", "get_meals"}
@@ -87,6 +89,12 @@ def build_agents() -> dict[str, Agent]:
         max_steps=2,
         planning_interval=0,
     )
+
+    opener = Agent( name="Opener", 
+                   client=fast_client, 
+                   system_prompt=OPENER_PROMPT, 
+                   tools=OPENER_TOOLS, 
+                   max_steps=1)
 
     # ── SpeakingAgent (just sets menu) ───────────────────────
     speaking_tools = _filter_tools(all_tools, SPEAKING_TOOLS | INFO_TOOLS)
@@ -138,6 +146,7 @@ def build_agents() -> dict[str, Agent]:
         "bidding": bidding,
         "market": market,
         "serving": serving,
+        "opener": opener,
     }
 
     for name, ag in agents.items():

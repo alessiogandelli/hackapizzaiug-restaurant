@@ -209,10 +209,12 @@ async def dispatch_events(event_queue: asyncio.Queue):
                     setup_turn_log_file(state.turn_id)
                 logger.info("")
                 logger.info("\U0001f3ae ══════ GAME STARTED  (turn %d) ══════", state.turn_id)
+                
                 await refresh_state()
 
                 # Run SpeakingAgent immediately to set menu + open restaurant
                 if controller is not None:
+                    
                     logger.info("🚀 Running SpeakingAgent at game start …")
                     with tracer.start_as_current_span("game_start_speaking"):
                         await controller.handle_phase("speaking")
