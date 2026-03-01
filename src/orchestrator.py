@@ -223,7 +223,7 @@ class PhaseController:
         # Update menu agent with new menu
         if self._current_menu:
             logger.info('updating menu based onthe bids')
-            await self._run_agent("menu", ' the current menu is' + self._current_menu, span_name="menu_update")
+            await self._run_agent("menu", ' the current menu is' + self._feasible_recipes, span_name="menu_update")
         else:
             logger.warning("No feasible menu to update!")
 
@@ -451,6 +451,7 @@ class PhaseController:
     async def _refresh_state(self) -> None:
         try:
             info = await get_restaurant_info()
+            logger.info(info)
             if isinstance(info, dict):
                 self.state.update_from_restaurant_info(info)
             else:

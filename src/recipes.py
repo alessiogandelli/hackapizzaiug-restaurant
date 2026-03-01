@@ -65,17 +65,23 @@ def find_feasible_recipes(all_recipes: list[dict], inventory: list[dict]) -> lis
 
     for recipe in all_recipes:
         ings = extract_recipe_ingredients(recipe)
+        logger.info("Checking recipe '%s' with ingredients: %s", recipe.get("name", "?"),
+                     ", ".join(f"{ing['name']}x{ing['quantity']}" for ing in ings))
         if not ings:
+            logger.info("Recipe '%s' has no valid ingredients, skipping", recipe.get("name", "?"))
             continue
         can_make = True
         for ing in ings:
+            logger.info("Checking ingredient '%s' x%d against stock", ing["name"], ing["quantity"])
             name = ing["name"]
             qty_needed = ing["quantity"]
             qty_in_stock = stock.get(name, 0)
             if qty_in_stock < qty_needed:
+                logger.debug("Not enough '%s': need %d, have %d", name, qty_needed, qty_in_stock)
                 can_make = False
                 break
         if can_make:
+            logger.info("Recipe '%s' is feasible", recipe.get("name", "?"))
             recipe["_ingredients_parsed"] = ings
             feasible.append(recipe)
     

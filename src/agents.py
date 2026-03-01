@@ -41,7 +41,7 @@ BIDDING_TOOLS = {"closed_bid"}
 MARKET_TOOLS = {"create_market_entry", "execute_transaction", "delete_market_entry"}
 SERVING_TOOLS = {"prepare_dish", "serve_dish", "get_meals", "update_restaurant_is_open"}
 OPENER_TOOLS = {"update_restaurant_is_open"}
-MENU_TOOLS = {"save_menu"}
+MENU_TOOLS = {"save_menu", "update_restaurant_is_open"}
 
 # Tools all executor agents can read (info only)
 INFO_TOOLS = {"restaurant_info", "get_meals"}
@@ -125,7 +125,7 @@ def build_agents() -> dict[str, Agent]:
     menu = Agent(
         name="MenuAgent",
         client=fast_client,
-        system_prompt="You are the Menu Agent. Your job is to set the restaurant menu using save_menu tool. Use the provided menu items in the context to build the menu. Do NOT modify names or prices. Do NOT add other dishes. Just call save_menu with the provided items.",
+        system_prompt="You are the Menu Agent. Your job is to set the restaurant menu using save_menu tool. Use the provided menu items in the context to build the menu. Do NOT modify names or prices. Do NOT add other dishes. Just call save_menu with the provided items. if there are no feasable menu close the restaurant",
         tools=menu_tools,
         max_steps=3,
         planning_interval=0,
