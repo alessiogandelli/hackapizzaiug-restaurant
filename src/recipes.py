@@ -32,7 +32,7 @@ def get_inventory_stock(inventory: list[dict]) -> dict[str, int]:
             stock[key] = stock.get(key, 0) + qty
     return stock
 
-
+#rotta
 def extract_recipe_ingredients(recipe: dict) -> list[dict]:
     """Extract ingredient list from a recipe dict.
     
