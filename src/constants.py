@@ -35,7 +35,7 @@ ALL_INGREDIENTS_LIST: list[str] = [
     "Foglie di Nebulosa",
     "Frammenti di Supernova",
     "Frutti del Diavolo",
-    "Funghi dell'Etere",
+    "Funghi dell’Etere",
     "Funghi Orbitali",
     "Fusilli del Vento",
     "Gnocchi del Crepuscolo",
