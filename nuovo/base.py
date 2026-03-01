@@ -12,13 +12,14 @@ import json
 from datetime import datetime
 from typing import Any, Awaitable, Callable
 from agenti import opener, bidder, menu, prepara, servi
-from ricette import ricette as all_recipes
-
+from data.ricette import ricette as all_recipes
 from config import TEAM_API_KEY, TEAM_ID, BASE_URL
-import aiohttp
 
-TEAM_ID = 15  # your team id
-TEAM_API_KEY = "dTpZhKpZ02-b91de4ab95c9fa33d6c7c9c0"
+import aiohttp
+from data.ingredienti import ingredienti
+import requests
+from data.ricette import ricette
+
 
 BASE_URL = "https://hackapizza.datapizza.tech"
 
@@ -71,13 +72,11 @@ def print_inventory() -> None:
 
 
 async def closed_bid_phase_started() -> None:
-    from ingredienti import ingredienti
     bidder.run("Fai un'offerta, compra uno di tutto a 3 euro ciascuno, " + str(ingredienti))
     log("EVENT", "closed bid phase started")
     print_inventory()
 
 async def waiting_phase_started() -> None:
-    from ricette import ricette
     menu.run("Aggiorna il menu utilizzando" + str(ricette) + " assicurati di sceglierne 12")
     log("EVENT", "waiting phase started")
 
@@ -90,7 +89,6 @@ async def end_turn() -> None:
     log("EVENT", "turn ended")
 
 def get_meals(turn_id: int) -> list:
-    import requests
     response = requests.get(
         f"{BASE_URL}/meals",
         params={"turn_id": turn_id, "restaurant_id": 15},

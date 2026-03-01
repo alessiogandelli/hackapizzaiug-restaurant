@@ -23,17 +23,16 @@ from src.config import (
 )
 from src.prompts import (
     PLANNER_PROMPT,
-    build_speaking_prompt,
     BIDDING_PROMPT,
     MARKET_PROMPT,
-    build_serving_prompt,
+    SERVING_PROMPT,
     OPENER_PROMPT,
 )
 
 logger = logging.getLogger(__name__)
 
 # ── Model config ─────────────────────────────────────────────
-FAST_MODEL = "gpt-oss-20b"         # cheap for simple tasks
+FAST_MODEL = "gpt-oss-120b"         # cheap for simple tasks
 SMART_MODEL = "gpt-oss-120b"       # smart for serving (intolerance checking)
 
 # ── Tool name sets per agent ─────────────────────────────────
@@ -42,6 +41,7 @@ BIDDING_TOOLS = {"closed_bid"}
 MARKET_TOOLS = {"create_market_entry", "execute_transaction", "delete_market_entry"}
 SERVING_TOOLS = {"prepare_dish", "serve_dish", "get_meals", "update_restaurant_is_open"}
 OPENER_TOOLS = {"update_restaurant_is_open"}
+MENU_TOOLS = {"save_menu"}
 
 # Tools all executor agents can read (info only)
 INFO_TOOLS = {"restaurant_info", "get_meals"}
@@ -103,7 +103,7 @@ def build_agents() -> dict[str, Agent]:
     speaking = Agent(
         name="SpeakingAgent",
         client=fast_client,
-        system_prompt=build_speaking_prompt([]),
+        system_prompt='parla',
         tools=speaking_tools,
         max_steps=3,
         planning_interval=0,
@@ -116,6 +116,17 @@ def build_agents() -> dict[str, Agent]:
         client=fast_client,
         system_prompt=BIDDING_PROMPT,
         tools=bidding_tools,
+        max_steps=3,
+        planning_interval=0,
+    )
+
+    # ── Menu Agent (create menu) ───────────────────────
+    menu_tools = _filter_tools(all_tools, MENU_TOOLS)
+    menu = Agent(
+        name="MenuAgent",
+        client=fast_client,
+        system_prompt="You are the Menu Agent. Your job is to set the restaurant menu using save_menu tool. Use the provided menu items in the context to build the menu. Do NOT modify names or prices. Do NOT add other dishes. Just call save_menu with the provided items.",
+        tools=menu_tools,
         max_steps=3,
         planning_interval=0,
     )
@@ -137,7 +148,7 @@ def build_agents() -> dict[str, Agent]:
     serving = Agent(
         name="ServingAgent",
         client=smart_client,
-        system_prompt=build_serving_prompt({}, []),
+        system_prompt=SERVING_PROMPT,
         tools=serving_tools,
         max_steps=15,
         planning_interval=0,
@@ -150,6 +161,7 @@ def build_agents() -> dict[str, Agent]:
         "market": market,
         "serving": serving,
         "opener": opener,
+        "menu": menu,
     }
 
     for name, ag in agents.items():

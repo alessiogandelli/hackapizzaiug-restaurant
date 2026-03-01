@@ -60,38 +60,26 @@ def find_feasible_recipes(all_recipes: list[dict], inventory: list[dict]) -> lis
     Returns a list of recipe dicts, each augmented with '_ingredients_parsed'.
     """
     stock = get_inventory_stock(inventory)
+    logger.info("INVENTORY STOCK | %s", ", ".join(f"{k}x{v}" for k, v in stock.items()))
     feasible = []
-    
+
     for recipe in all_recipes:
-        if not isinstance(recipe, dict):
+        ings = extract_recipe_ingredients(recipe)
+        if not ings:
             continue
-        name = recipe.get("name", "")
-        if not name:
-            continue
-        
-        ingredients = extract_recipe_ingredients(recipe)
-        if not ingredients:
-            logger.debug("Recipe '%s' has no ingredients — skipping", name)
-            continue
-        
-        # Check if we have ALL ingredients
         can_make = True
-        for ing in ingredients:
-            ing_name = ing["name"]
-            needed = ing["quantity"]
-            have = stock.get(ing_name, 0)
-            if have < needed:
+        for ing in ings:
+            name = ing["name"]
+            qty_needed = ing["quantity"]
+            qty_in_stock = stock.get(name, 0)
+            if qty_in_stock < qty_needed:
                 can_make = False
                 break
-        
         if can_make:
-            recipe_copy = dict(recipe)
-            recipe_copy["_ingredients_parsed"] = ingredients
-            feasible.append(recipe_copy)
-            logger.info("RECIPE FEASIBLE | %s (needs: %s)", 
-                       name, ", ".join(f"{i['name']}x{i['quantity']}" for i in ingredients))
-        else:
-            logger.debug("RECIPE NOT FEASIBLE | %s (missing ingredients)", name)
+            recipe["_ingredients_parsed"] = ings
+            feasible.append(recipe)
+    
+
     
     logger.info("RECIPES | %d feasible out of %d total recipes", len(feasible), len(all_recipes))
     return feasible

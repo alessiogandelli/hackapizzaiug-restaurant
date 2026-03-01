@@ -10,7 +10,7 @@ from datapizza.agents import Agent
 from datapizza.clients.openai_like import OpenAILikeClient
 from datapizza.tools.mcp_client import MCPClient
 
-from src.config import (
+from config import (
     REGOLO_API_KEY,
     REGOLO_BASE_URL,
     MCP_URL,

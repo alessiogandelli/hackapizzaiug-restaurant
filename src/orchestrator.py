@@ -15,7 +15,7 @@ import json
 import logging
 
 from datapizza.agents import Agent
-
+from src.data.ingredienti import ingredienti
 from src.state import GameState
 from src.memory import GameMemory
 from src.constants import (
@@ -38,16 +38,14 @@ from src.recipes import (
     get_inventory_stock,
     get_recipe_summary,
 )
-from src.prompts import (
-    build_speaking_prompt,
-    build_serving_prompt,
-)
+
 from src.api import (
     get_restaurant_info,
     get_all_restaurants,
     get_recipes,
     get_market_entries,
     get_bid_history,
+    get_meals
 )
 
 logger = logging.getLogger(__name__)
@@ -134,33 +132,34 @@ class PhaseController:
         logger.info("  Prepared:     %s", self.memory.prepared_dishes)
         logger.info("  Available dishes: %d", len(self._current_recipe_ingredients))
 
-        if not self._current_recipe_ingredients:
-            logger.warning("No feasible recipes — cannot serve client %s", client_name)
+        # Fetch client ID from meals API
+        client_id = await self._get_client_id(client_name)
+        if not client_id:
+            logger.error("Could not find client ID for %s", client_name)
             return
+        
+        logger.info("  Client ID:    %s", client_id)
 
-        # Build recipe block from DYNAMIC feasible recipes
-        recipe_block = "\n".join(
-            f"  - {name}: {', '.join(ings)}"
-            for name, ings in self._current_recipe_ingredients.items()
-        )
-
+        # Call serving agent to check allergies and prepare dish
         context = (
-            f"GAME STATE: {self.state.summary()}\n\n"
-            f"OUR AVAILABLE RECIPES AND THEIR INGREDIENTS:\n{recipe_block}\n\n"
-            f"ALREADY PREPARED DISHES: {json.dumps(self.memory.prepared_dishes)}\n"
-            f"ALREADY SERVED THIS TURN: {json.dumps(self.memory.served_this_turn, default=str)}\n\n"
-            f"NEW CLIENT:\n"
-            f"  Client name: {client_name}\n"
-            f"  Order text: \"{order}\"\n"
-            f"  Intolerances: {json.dumps(intolerances)}\n\n"
-            f"TASK: Choose the BEST dish for this client from our available recipes.\n"
-            f"1. CHECK INTOLERANCES against the ingredients of EACH recipe\n"
-            f"2. If a safe dish exists, call prepare_dish with the EXACT recipe name (case-sensitive!)\n"
-            f"3. If NO dish is safe, skip this client (do nothing)\n"
-            f"4. Dish names must be copied CHARACTER BY CHARACTER"
+            f"CLIENT ORDER:\n"
+            f"  Name: {client_name}\n"
+            f"  Client ID: {client_id}\n"
+            f"  Order: {order}\n"
+            f"  Intolerances: {intolerances}\n\n"
+            f"AVAILABLE RECIPES: {json.dumps(self._current_recipe_ingredients)}\n\n"
+            f"INVENTORY: {json.dumps(self.state.inventory)}\n\n"
+            f"TASK: Check if the ordered dish is safe for this client (no allergens). "
+            f"If safe, call prepare_dish with the exact dish name from the order. "
+            f"Store the mapping: dish -> client_id={client_id} for when it's ready to serve."
         )
+        await self._run_agent("serving", context, span_name="handle_client_order")
 
-        await self._run_agent("serving", context, span_name="serve_client")
+
+
+
+
+
 
     async def handle_preparation_complete(self, data: dict) -> None:
         if not isinstance(data, dict):
@@ -168,180 +167,65 @@ class PhaseController:
             return
 
         dish = data.get("dish", "")
+        meal_id = data.get("id", "")
         self.memory.record_dish_prepared(dish)
 
         logger.info("─── DISH READY ───")
         logger.info("  Dish:     %s", dish)
+        logger.info("  Meal ID:  %s", meal_id)
         logger.info("  Pending:  %d clients", len(self.memory.pending_clients))
 
-        context = (
-            f"GAME STATE: {self.state.summary()}\n\n"
-            f"DISH READY: '{dish}'\n"
-            f"PENDING CLIENTS: {json.dumps(self.memory.pending_clients, default=str)}\n"
-            f"ALREADY SERVED: {json.dumps(self.memory.served_this_turn, default=str)}\n\n"
-            f"TASK: Serve the dish '{dish}' to the appropriate waiting client.\n"
-            f"Use serve_dish with the dish_name and the client_id of the matching client."
-        )
+        # Find client waiting for this dish
+        client_id = await self._find_client_for_dish(dish)
+        if not client_id:
+            logger.error("No client found waiting for dish: %s", dish)
+            return
+        
+        logger.info("  Client ID:    %s", client_id)
 
+        # Call serving agent to serve the prepared dish
+        context = (
+            f"PREPARED DISH:\n"
+            f"  Dish: {dish}\n"
+            f"  Meal ID: {meal_id}\n"
+            f"  Client ID: {client_id}\n\n"
+            f"TASK: Call serve_dish with dish_name='{dish}' and client_id='{client_id}'"
+        )
         await self._run_agent("serving", context, span_name="serve_prepared_dish")
 
     # ── Phase handlers ───────────────────────────────────────
     async def _handle_speaking(self) -> None:
         """Speaking: run planner once, then set dynamic menu based on inventory."""
-        logger.info("── SPEAKING: Running planner + setting dynamic menu ──")
+        logger.info("── SPEAKING: non facciamo un cazzo stiamo zitti──")
+        await self._run_agent("opener", "apriamo il ristorante", span_name="opener_open")
 
-        # Run planner ONCE per turn
-        if not self._planner_ran_this_turn:
-            await self._run_planner()
-            self._planner_ran_this_turn = True
-            self.memory.start_turn(self.state.balance)
 
-        # Build dynamic menu from inventory + recipes
-        await self._rebuild_feasible_menu()
-
-        if not self._current_menu:
-            logger.warning("No feasible recipes — menu will be empty, but still opening restaurant")
-            # Still open the restaurant so we can receive clients after bids
-        
-        # Log what we're about to set
-        logger.info("DYNAMIC MENU to set (%d items):", len(self._current_menu))
-        for item in self._current_menu:
-            logger.info("  %s  →  %d credits", item["name"], item["price"])
-
-        # Build the speaking prompt with the dynamic menu
-        speaking_system_prompt = build_speaking_prompt(self._current_menu)
-        
-        # Temporarily update the speaking agent's system prompt
-        speaking_agent = self.agents.get("speaking")
-        if speaking_agent:
-            speaking_agent._system_prompt = speaking_system_prompt
-
-        menu_json = json.dumps(self._current_menu, ensure_ascii=False)
-        context = (
-            f"GAME STATE: {self.state.summary()}\n\n"
-            f"TASK: You must do TWO things in order:\n"
-            f"1. Call save_menu with exactly these items:\n{menu_json}\n"
-            f"2. Call update_restaurant_is_open with is_open=true to open the restaurant.\n\n"
-            f"CRITICAL: Copy each dish name CHARACTER BY CHARACTER — they are case-sensitive!\n"
-            f"Do NOT send any messages."
-        )
-
-        await self._run_agent("speaking", context, span_name="phase_speaking")
 
     async def _handle_bidding(self) -> None:
         """Closed bid: UNDERCUTTING — bid 3 credits × 3 units on ALL ingredients."""
         logger.info("── BIDDING: UNDERCUTTING STRATEGY — 3 credits on everything ──")
+        logger.info('gli ingredienti da biddare sono: ' + str(ingredienti))
+
+        # Bid on all ingredients in a single call
+        logger.info("Bidding on all ingredients: %s", ingredienti)
+        await self._run_agent("bidding", "offer 3 for each one of these ingredients: " + str(ingredienti), span_name="bidder_undercut_all")
 
         # Check what we already have
-        stock = get_inventory_stock(self.state.inventory)
-        logger.info("Current stock: %d unique ingredients", len([k for k, v in stock.items() if v > 0]))
-
-        # Build bid list: bid on everything we don't have enough of
-        turn_remaining = self.memory.remaining_turn_budget(MAX_TURN_SPEND)
-        budget = min(MAX_BID_SPEND, self.state.balance * 0.95, turn_remaining)
-        logger.info("  Budget: %.0f (bid cap=%.0f, balance*0.95=%.0f, turn remaining=%.0f)",
-                    budget, MAX_BID_SPEND, self.state.balance * 0.95, turn_remaining)
-        
-        bids = []
-        total_cost = 0.0
-
-        for bid_template in DEFAULT_BIDS:
-            ing = bid_template["ingredient"]
-            have = stock.get(ing, 0)
-            want = bid_template["quantity"]
-
-            if have >= want:
-                logger.debug("  SKIP %s (have %d, need %d)", ing, have, want)
-                continue
-
-            need = want - have
-            price = bid_template["bid"]  # 3 credits per unit
-            cost = need * price
-
-            if total_cost + cost > budget:
-                logger.info("  SKIP %s (budget exceeded: %.0f + %.0f > %.0f)", ing, total_cost, cost, budget)
-                continue
-
-            bids.append({
-                "ingredient": ing,  # CRITICAL: preserve exact capitalization
-                "quantity": need,
-                "bid": price,
-            })
-            total_cost += cost
-
-        logger.info("FINAL BID: %d ingredients, %d credits each, total cost=%.0f, budget=%.0f", 
-                    len(bids), BID_PRICE_PER_UNIT, total_cost, budget)
-
-        # Record bid spending against the turn cap
-        self.memory.record_spending(total_cost, "bids")
-
-        if not bids:
-            logger.info("Nothing to bid on — skipping")
-            return
-
-        bids_json = json.dumps(bids, ensure_ascii=False, indent=2)
-        context = (
-            f"GAME STATE: {self.state.summary()}\n\n"
-            f"TASK: Submit these bids by calling closed_bid.\n\n"
-            f"USE THIS EXACT JSON (copy character-by-character):\n"
-            f"```json\n{bids_json}\n```\n\n"
-            f"CRITICAL:\n"
-            f"- Ingredient names are case-sensitive\n"
-            f"- Copy the ingredient field EXACTLY as shown above\n"
-            f"- Do NOT change any capitalization\n"
-            f"- Call: closed_bid(bids=<paste the JSON array above>)"
-        )
-
-        await self._run_agent("bidding", context, span_name="phase_closed_bid")
-
+       
     async def _handle_waiting(self) -> None:
-        """Waiting: CRITICAL — rebuild feasible menu after bids resolved, update menu."""
-        logger.info("── WAITING: Post-bid → rebuilding dynamic menu ──")
-
+        """Waiting: refresh inventory, rebuild feasible menu, update menu agent."""
+        logger.info("── WAITING: Refresh inventory, rebuild feasible menu ──")
         await self._refresh_state()
-        self._log_state()
-
-        # Record bid outcomes
-        try:
-            bid_history = await self._safe_call(lambda: get_bid_history(self.state.turn_id), [])
-            if bid_history:
-                self.memory.record_bid_result(self.state.turn_id, [], bid_history)
-                won = [b for b in bid_history if b.get("status") == "COMPLETED"]
-                lost = [b for b in bid_history if b.get("status") != "COMPLETED"]
-                logger.info("Bid results: %d WON, %d LOST out of %d total", 
-                           len(won), len(lost), len(bid_history))
-                for b in won:
-                    ing = b.get("ingredient", {}).get("name", "?")
-                    price = b.get("priceForEach", "?")
-                    logger.info("  WON: %s at %s credits", ing, price)
-        except Exception as exc:
-            logger.warning("Could not fetch bid history: %s", exc)
-
-        # ═══ KEY STEP: Rebuild feasible menu from inventory + recipes ═══
         await self._rebuild_feasible_menu()
 
-        if self._current_menu:
-            logger.info("MENU UPDATED after bids — %d dishes available", len(self._current_menu))
-            
-            # Update menu via Speaking Agent
-            speaking_system_prompt = build_speaking_prompt(self._current_menu)
-            speaking_agent = self.agents.get("speaking")
-            if speaking_agent:
-                speaking_agent._system_prompt = speaking_system_prompt
+        logger.info('')
 
-            menu_json = json.dumps(self._current_menu, ensure_ascii=False)
-            context = (
-                f"GAME STATE: {self.state.summary()}\n\n"
-                f"TASK: Update our menu with these items (we got new ingredients from bids):\n"
-                f"Call save_menu with exactly these items:\n{menu_json}\n\n"
-                f"CRITICAL: Copy each dish name CHARACTER BY CHARACTER — case-sensitive!\n"
-                f"Do NOT send any messages. Do NOT call update_restaurant_is_open."
-            )
-            await self._run_agent("speaking", context, span_name="phase_waiting_update_menu")
+        # Update menu agent with new menu
+        if self._current_menu:
+            logger.info('updating menu based onthe bids')
+            await self._run_agent("menu", ' the current menu is' + self._current_menu, span_name="menu_update")
         else:
-            logger.warning("No feasible recipes after bids — menu stays empty")
-        
-        logger.info("Turn spending so far: %.0f / %d", self.memory.turn_total_spent, MAX_TURN_SPEND)
+            logger.warning("No feasible menu to update!")
 
     async def _handle_serving_phase(self) -> None:
         """Serving start: rebuild menu one more time, update serving agent prompts."""
@@ -355,24 +239,7 @@ class PhaseController:
         await self._refresh_state()
         await self._rebuild_feasible_menu()
 
-        if not self._current_recipe_ingredients:
-            logger.warning("No feasible recipes — closing restaurant")
-            return
-
-        # Update serving agent system prompt with current feasible recipes
-        serving_agent = self.agents.get("serving")
-        if serving_agent:
-            serving_prompt = build_serving_prompt(self._current_recipe_ingredients, self._current_menu)
-            serving_agent._system_prompt = serving_prompt
-
-        recipe_block = "\n".join(
-            f"  - {name}: {', '.join(ings)}"
-            for name, ings in self._current_recipe_ingredients.items()
-        )
-
-        logger.info("Restaurant is open. %d dishes available:", len(self._current_recipe_ingredients))
-        logger.info("%s", recipe_block)
-        logger.info("Waiting for client events.")
+        
 
     async def _handle_stopped(self) -> None:
         """Turn ended — record results, save everything, reset."""
@@ -431,21 +298,6 @@ class PhaseController:
         # Build ingredients map for serving agent
         self._current_recipe_ingredients = build_recipe_ingredients_map(self._feasible_recipes)
         
-        # Update module-level constants so other code can reference them
-        MENU_ITEMS.clear()
-        MENU_ITEMS.extend(self._current_menu)
-        OUR_RECIPE_NAMES.clear()
-        OUR_RECIPE_NAMES.update(r["name"] for r in self._feasible_recipes)
-        RECIPE_INGREDIENTS.clear()
-        RECIPE_INGREDIENTS.update(self._current_recipe_ingredients)
-        
-        logger.info("═══ DYNAMIC MENU REBUILT ═══")
-        logger.info("  Feasible recipes: %d / %d total", 
-                    len(self._feasible_recipes), len(self.state.recipes))
-        for item in self._current_menu:
-            logger.info("  → %s @ %d credits", item["name"], item["price"])
-        if not self._current_menu:
-            logger.info("  (no dishes feasible with current inventory)")
 
     # ── Planner ──────────────────────────────────────────────
     async def _run_planner(self) -> None:
@@ -546,6 +398,56 @@ class PhaseController:
             return None
 
     # ── Helpers ──────────────────────────────────────────────
+    async def _get_client_id(self, client_name: str) -> str | None:
+        """Fetch client ID from meals API by matching client name."""
+        try:
+            meals = await get_meals(self.state.turn_id)
+            logger.debug("get_meals returned %d entries", len(meals))
+            
+            for meal in meals:
+                customer = meal.get("customer") or {}
+                meal_name = customer.get("name", "")
+                executed = meal.get("executed", False)
+                
+                if meal_name == client_name and not executed:
+                    client_id = meal.get("customerId") or meal.get("id")
+                    logger.debug("Found client_id=%s for %s", client_id, client_name)
+                    return str(client_id) if client_id else None
+            
+            logger.warning("Client %s not found in meals", client_name)
+            return None
+            
+        except Exception as exc:
+            logger.exception("Error fetching client ID for %s: %s", client_name, exc)
+            return None
+    
+    async def _find_client_for_dish(self, dish_name: str) -> str | None:
+        """Find the client ID who ordered this dish from pending clients."""
+        try:
+            meals = await get_meals(self.state.turn_id)
+            
+            for meal in meals:
+                # The dish name is in the "request" field, not "dish"
+                meal_request = meal.get("request", "")
+                executed = meal.get("executed", False)
+                
+                # Check if the dish name is in the request (exact match or contained within)
+                if meal_request and not executed:
+                    # Try exact match first
+                    if meal_request == dish_name or dish_name in meal_request:
+                        customer = meal.get("customer") or {}
+                        client_id = meal.get("customerId") or meal.get("id")
+                        client_name = customer.get("name", "unknown")
+                        logger.debug("Found client_id=%s (%s) for dish %s", client_id, client_name, dish_name)
+                        return str(client_id) if client_id else None
+            
+            logger.warning("No pending order found for dish: %s", dish_name)
+            return None
+            
+        except Exception as exc:
+            logger.exception("Error finding client for dish %s: %s", dish_name, exc)
+            return None
+
     async def _refresh_state(self) -> None:
         try:
             info = await get_restaurant_info()

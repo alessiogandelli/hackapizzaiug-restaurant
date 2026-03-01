@@ -25,10 +25,7 @@ from src.recipes import (
     get_inventory_stock,
     get_recipe_summary,
 )
-from src.prompts import (
-    build_speaking_prompt,
-    build_serving_prompt,
-)
+
 from src.api import (
     get_restaurant_info,
     get_all_restaurants,
